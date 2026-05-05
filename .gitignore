@@ -1,0 +1,30 @@
+# API Keys and Secrets
+.env
+*.env
+**/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Data files
+data/raw_responses/*.json
+data/processed/*.csv
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results
+results/*.pdf
+results/*.docx
