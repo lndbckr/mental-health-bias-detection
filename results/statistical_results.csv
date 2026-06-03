@@ -1,0 +1,47 @@
+test_type,outcome,grouping_var,group1,group2,statistic,df_num,df_den,p_value,p_corrected,significant_corrected,note
+welch_anova,severity_score,gender,,,3.0628,4.0,133.87,0.0188,0.2256,False,pingouin
+welch_anova,severity_score,age_group,,,3.4319,2.0,186.46,0.0344,0.4128,False,pingouin
+welch_anova,severity_score,prompt_type,,,6.4181,1.0,250.18,0.0119,0.1428,False,pingouin
+welch_anova,impairment_score,gender,,,0.8959,4.0,147.44,0.4681,1.0,False,pingouin
+welch_anova,impairment_score,age_group,,,10.2572,2.0,194.52,0.0001,0.0012,True,pingouin
+welch_anova,impairment_score,prompt_type,,,1.6571,1.0,297.67,0.199,1.0,False,pingouin
+welch_anova,treatment_score,gender,,,0.5084,4.0,147.08,0.7296,1.0,False,pingouin
+welch_anova,treatment_score,age_group,,,3.4836,2.0,190.32,0.0327,0.3924,False,pingouin
+welch_anova,treatment_score,prompt_type,,,2.0314,1.0,267.95,0.1552,1.0,False,pingouin
+welch_anova,minimizing_score,gender,,,2.1613,4.0,146.87,0.0762,0.9144,False,pingouin
+welch_anova,minimizing_score,age_group,,,2.035,2.0,197.2,0.1334,1.0,False,pingouin
+welch_anova,minimizing_score,prompt_type,,,10.3343,1.0,276.12,0.0015,0.018,True,pingouin
+games_howell,impairment_score,age_group,18-25,40-55,-3.204,,186.81,0.0045,0.0045,True,games-howell
+games_howell,impairment_score,age_group,18-25,65+,-4.171,,184.3,0.0001,0.0001,True,games-howell
+games_howell,impairment_score,age_group,40-55,65+,-0.9236,,197.82,0.626,0.626,False,games-howell
+games_howell,minimizing_score,prompt_type,base,mitigation,3.2147,,276.12,0.0015,0.0015,True,games-howell
+chi_square,diagnosis_yes_no,gender,,,0.0,0.0,,1.0,,False,chi_square
+chi_square,diagnosis_yes_no,age_group,,,0.0,0.0,,1.0,,False,chi_square
+chi_square,treatment_type_profile,gender,,,5.21,4.0,,0.2664,,False,chi_square
+chi_square,treatment_type_profile,age_group,,,11.4207,2.0,,0.0033,,True,chi_square
+chi_square,framing_label,gender,,,81.4594,12.0,,0.0,,True,chi_square
+chi_square,framing_label,age_group,,,13.2398,6.0,,0.0394,,True,chi_square
+welch_ttest,severity_score,neutral_vs_base,base,neutral_full,0.6137,,,0.5535,,False,severity=mild | neutral_full vs base
+welch_ttest,impairment_score,neutral_vs_base,base,neutral_full,-0.3841,,,0.709,,False,severity=mild | neutral_full vs base
+welch_ttest,treatment_score,neutral_vs_base,base,neutral_full,0.7566,,,0.4685,,False,severity=mild | neutral_full vs base
+welch_ttest,minimizing_score,neutral_vs_base,base,neutral_full,-0.3175,,,0.7572,,False,severity=mild | neutral_full vs base
+welch_ttest,severity_score,neutral_vs_base,base,neutral_age,-0.3337,,,0.7394,,False,severity=mild | neutral_age vs base
+welch_ttest,impairment_score,neutral_vs_base,base,neutral_age,0.4794,,,0.6329,,False,severity=mild | neutral_age vs base
+welch_ttest,treatment_score,neutral_vs_base,base,neutral_age,-0.0545,,,0.9567,,False,severity=mild | neutral_age vs base
+welch_ttest,minimizing_score,neutral_vs_base,base,neutral_age,0.2747,,,0.7842,,False,severity=mild | neutral_age vs base
+welch_ttest,severity_score,neutral_vs_base,base,neutral_gender,-1.9812,,,0.0516,,False,severity=mild | neutral_gender vs base
+welch_ttest,impairment_score,neutral_vs_base,base,neutral_gender,-0.1445,,,0.8858,,False,severity=mild | neutral_gender vs base
+welch_ttest,treatment_score,neutral_vs_base,base,neutral_gender,-1.1164,,,0.2693,,False,severity=mild | neutral_gender vs base
+welch_ttest,minimizing_score,neutral_vs_base,base,neutral_gender,0.5002,,,0.6197,,False,severity=mild | neutral_gender vs base
+two_way_anova,severity_score,gender,gender,age_group,0.8539,4.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,severity_score,age_group,gender,age_group,3.3472,2.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,severity_score,gender * age_group,gender,age_group,0.7002,8.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,impairment_score,gender,gender,age_group,1.083,4.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,impairment_score,age_group,gender,age_group,6.1359,2.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,impairment_score,gender * age_group,gender,age_group,1.0524,8.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,treatment_score,gender,gender,age_group,1.0071,4.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,treatment_score,age_group,gender,age_group,0.4082,2.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,treatment_score,gender * age_group,gender,age_group,1.1932,8.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,minimizing_score,gender,gender,age_group,2.4495,4.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,minimizing_score,age_group,gender,age_group,1.4805,2.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
+two_way_anova,minimizing_score,gender * age_group,gender,age_group,1.4136,8.0,,,,False,two-way ANOVA (not strictly Welch; standard Type-III SS)
