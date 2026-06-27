@@ -2,25 +2,25 @@
 
 **Course:** Gender, Diversity & AI — University of Klagenfurt, SS2026
 
-> This codebase was generated via the [Promptotyping](https://promptotyping.com) methodology.
+> This codebase was generated via the [Promptotyping](https://github.com/DigitalHumanitiesCraft/promptotyping-skill) methodology.
 
 ---
 
 ## Requirements
 
 - Python 3.13, Ollama running locally with `llama3:8b` and `mistral:7b` pulled
-- `pip install requests>=2.31 pandas>=2.2 matplotlib>=3.8 seaborn>=0.13`
+- `pip install requests>=2.31 pandas>=2.2 matplotlib>=3.8`
 
 ---
 
 ## How to Run
 
-**Prototype (smoke-test, 1 run per variant):**
+**Prototype (1 run per variant):**
 ```bash
 python main.py --prototype
 ```
 
-**One nightly batch** (recommended — 390 LLM calls + 780 judge calls):
+**One batch** (390 LLM calls + 390 judge calls):
 ```bash
 python main.py --batch --severity mild --models mistral:7b --judge-model llama3:8b
 ```
@@ -46,7 +46,7 @@ Interrupted batches can be resumed — already-written raw responses are skipped
 | neutral_full / neutral_age / neutral_gender | 720 |
 | **Total** | **3,120** |
 
-Plus ~6,240 judge calls (Q4a + Q4b per run).
+Plus ~3,120 judge calls.
 
 ---
 
@@ -55,7 +55,7 @@ Plus ~6,240 judge calls (Q4a + Q4b per run).
 | Path | Description |
 |---|---|
 | `data/raw_responses/{variant_id}.json` | One file per run |
-| `data/processed/results_{sev}_{model}.csv` | Parsed + scored partition per batch |
+| `data/processed/results_{sev}_{model_slug}.csv` | Parsed + scored partition per batch |
 | `results/aggregated_results.csv` | Descriptive stats per variant |
-| `results/comparisons.csv` | Observed differences between conditions |
+| `results/comparisons_{gender,age,intersectionality}.csv` | Observed differences between conditions |
 | `results/plots/*.png` | Visualizations |
