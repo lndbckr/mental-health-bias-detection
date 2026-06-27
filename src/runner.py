@@ -1,168 +1,126 @@
 """
 src/runner.py
-Implements design.md § Architecture → runner.py
-
-Calls Ollama HTTP API for each (variant × model × run) and writes a raw
-response JSON to data/raw_responses/. Existing files are skipped, so the
-pipeline can resume after a crash without re-running completed calls.
+Implements: design.md § runner.py, requirements.md § CLI Progress Output.
+Calls Ollama HTTP API for each variant × run, writes raw JSON to data/raw_responses/.
+Crash-resume: skips any variant_id whose .json already exists.
 """
+
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 import requests
 
-from src.prompt_builder import build_prompt, get_variants, make_variant_id
+from src.prompt_builder import (
+    build_prompt,
+    iter_variants,
+    make_variant_id,
+    model_slug,
+)
 
-# ---------------------------------------------------------------------------
-# Constants (design.md § Implementation Details + Experiment Variables)
-# ---------------------------------------------------------------------------
-OLLAMA_URL = "http://localhost:11434/api/generate"
-TEMPERATURE = 0.8
+_RAW_DIR  = Path(__file__).parent.parent / "data" / "raw_responses"
+_OLLAMA_URL = "http://localhost:11434/api/generate"
+_TEMPERATURE = 0.8
+_RUNS_PER_VARIANT = 10
 
-ALL_MODELS       = ["llama3:8b", "mistral:7b"]
-ALL_GENDERS      = ["woman", "man", "non-binary", "trans-woman", "trans-man"]
-ALL_AGE_GROUPS   = ["18-25", "40-55", "65+"]
-ALL_SEVERITIES   = ["mild", "moderate", "severe", "ambiguous"]
-ALL_PROMPT_TYPES = ["base", "mitigation", "neutral_full", "neutral_age", "neutral_gender"]
-
-_RAW_DIR = Path(__file__).parent.parent / "data" / "raw_responses"
+_ALL_PROMPT_TYPES = ['base', 'mitigation', 'neutral_full', 'neutral_age', 'neutral_gender']
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _filename(variant_id: str) -> str:
-    """Colons replaced with underscores for filesystem safety (design.md § Raw Response Format)."""
-    return variant_id.replace(":", "_") + ".json"
-
-
-def _call_ollama(model: str, prompt: str) -> str:
-    """
-    POST to Ollama generate endpoint (stream=False, temperature=0.8, no seed).
-    Returns the raw text response string.
-    Raises requests.exceptions.ConnectionError if Ollama is not running.
-    """
+def _ollama_call(model: str, prompt: str) -> str:
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": TEMPERATURE},
+        "options": {"temperature": _TEMPERATURE},
     }
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=180)
+    resp = requests.post(_OLLAMA_URL, json=payload, timeout=300)
     resp.raise_for_status()
     return resp.json()["response"]
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def run(severities: list[str], models: list[str],
+        prompt_types: list[str] | None = None,
+        runs_per_variant: int = _RUNS_PER_VARIANT) -> None:
 
-def run(
-    severities: list[str] = ALL_SEVERITIES,
-    prompt_types: list[str] = ALL_PROMPT_TYPES,
-    genders: list[str] = ALL_GENDERS,
-    age_groups: list[str] = ALL_AGE_GROUPS,
-    models: list[str] = ALL_MODELS,
-    runs_per_variant: int = 10,
-    output_dir: Path | None = None,
-) -> None:
-    """
-    Run the prompt → Ollama → raw_response pipeline for the given scope.
+    _RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    Parameters map directly to the experiment dimensions in design.md.
-    Prototype scope: severities=['mild'], models=['llama3:8b'].
+    if prompt_types is None:
+        prompt_types = _ALL_PROMPT_TYPES
 
-    Each completed run is written to output_dir as:
-        {variant_id with ':' → '_'}.json
-
-    Skips files that already exist (crash-resume).
-    Aborts on ConnectionError — Ollama must be running before calling run().
-    """
-    out_dir = output_dir or _RAW_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    variants = get_variants(severities, prompt_types, genders, age_groups)
-    total = len(variants) * len(models) * runs_per_variant
-    done = skipped = failed = 0
+    variants = iter_variants(severities, prompt_types)
+    total_calls = len(variants) * len(models) * runs_per_variant
 
     print(
-        f"Runner: {len(variants)} variants × {len(models)} model(s) "
-        f"× {runs_per_variant} runs = {total} calls"
+        f"=== runner.py START ===  severity={'+'.join(severities)}  "
+        f"model={'+'.join(models)}  variants={len(variants) * len(models)}  "
+        f"runs/variant={runs_per_variant}  total={total_calls} calls",
+        flush=True,
     )
 
+    call_count = 0
+    skipped    = 0
+
     for model in models:
-        for variant in variants:
-            severity    = variant["severity"]
-            prompt_type = variant["prompt_type"]
-            gender_id   = variant["gender_id"]
-            age_group_id= variant["age_group_id"]
-            gender      = variant["gender"]
-            age_group   = variant["age_group"]
+        slug = model_slug(model)
+        for v in variants:
+            gid = v['gender'] if v['gender'] != 'unspecified' else None
+            aid = v['age_group'] if v['age_group'] != 'unspecified' else None
 
-            # Build prompt once per variant — reused across all N runs
-            prompt = build_prompt(severity, prompt_type, gender_id, age_group_id)
-
-            for run_number in range(1, runs_per_variant + 1):
-                variant_id = make_variant_id(
-                    prompt_type, gender_id, age_group_id, severity, model, run_number
+            for run_num in range(1, runs_per_variant + 1):
+                vid = make_variant_id(
+                    v['prompt_type'], v['gender'], v['age_group'],
+                    v['severity'], slug, run_num,
                 )
-                out_path = out_dir / _filename(variant_id)
+                out_path = _RAW_DIR / f"{vid}.json"
 
                 if out_path.exists():
                     skipped += 1
-                    done += 1
+                    call_count += 1
+                    _maybe_print_progress(call_count, total_calls, vid)
                     continue
 
-                try:
-                    raw_response = _call_ollama(model, prompt)
-
-                except requests.exceptions.ConnectionError:
-                    # Fatal: Ollama is not reachable — no point attempting remaining calls
-                    print(
-                        f"\nFATAL: Cannot connect to Ollama at {OLLAMA_URL}\n"
-                        f"Start Ollama with 'ollama serve' and re-run.",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-
-                except requests.exceptions.Timeout:
-                    print(f"  TIMEOUT  {variant_id}", file=sys.stderr)
-                    failed += 1
-                    done += 1
-                    continue
-
-                except Exception as exc:  # noqa: BLE001
-                    print(f"  ERROR    {variant_id}: {exc}", file=sys.stderr)
-                    failed += 1
-                    done += 1
-                    continue
-
-                # ── Write raw response record (design.md § Raw Response Format) ──
-                record = {
-                    "variant_id":     variant_id,
-                    "prompt_type":    prompt_type,
-                    "gender":         gender,
-                    "age_group":      age_group,
-                    "severity_level": severity,
-                    "run_number":     run_number,
-                    "model":          model,
-                    "temperature":    TEMPERATURE,
-                    "timestamp":      datetime.now().isoformat(timespec="seconds"),
-                    "prompt":         prompt,
-                    "raw_response":   raw_response,
-                }
-                out_path.write_text(
-                    json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+                prompt = build_prompt(
+                    v['prompt_type'], v['severity'],
+                    gender_id=gid, age_group_id=aid,
                 )
 
-                done += 1
-                pct = 100 * done / total
-                print(f"  [{done:>4}/{total} {pct:>3.0f}%]  {variant_id}", flush=True)
+                try:
+                    raw = _ollama_call(model, prompt)
+                except Exception as exc:
+                    print(f"  ERROR: {vid} — {exc}", file=sys.stderr, flush=True)
+                    raw = ""
 
-    new_calls = done - skipped - failed
+                record = {
+                    "variant_id":    vid,
+                    "prompt_type":   v['prompt_type'],
+                    "gender":        v['gender'],
+                    "age_group":     v['age_group'],
+                    "severity_level": v['severity'],
+                    "run_number":    run_num,
+                    "model":         model,
+                    "temperature":   _TEMPERATURE,
+                    "timestamp":     datetime.now().isoformat(timespec='seconds'),
+                    "prompt":        prompt,
+                    "raw_response":  raw,
+                }
+
+                out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2),
+                                    encoding='utf-8')
+                call_count += 1
+                _maybe_print_progress(call_count, total_calls, vid)
+
+    new_calls = call_count - skipped
     print(
-        f"Runner complete — new: {new_calls}  skipped: {skipped}  failed: {failed}"
+        f"=== runner.py DONE  ===  {new_calls} new calls made  "
+        f"({skipped}/{total_calls} skipped — raw file already on disk)",
+        flush=True,
     )
+
+
+def _maybe_print_progress(count: int, total: int, vid: str) -> None:
+    width = len(str(total))
+    if count % 50 == 0 or count == total:
+        label = "DONE" if count == total else vid
+        print(f"[{count:{width}d}/{total} calls]  {label}", flush=True)

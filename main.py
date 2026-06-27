@@ -1,243 +1,187 @@
-#!/usr/bin/env python3
 """
-main.py — single entry point for the mental health bias detection experiment.
-
-Usage (design.md § main.py CLI):
-  python main.py                                # full experiment (~3120 calls)
-  python main.py --prototype                    # mild severity, both models (~780 calls)
-  python main.py --prototype --models llama3:8b # mild severity, llama3 only (~390 calls)
-  python main.py --prototype --severity moderate # override severity level
-  python main.py --models llama3:8b            # llama3 only, all severities
-  python main.py --severity mild moderate       # subset of severities
-
-  # Step-by-step (resume from checkpoint — each step reads from disk):
-  python main.py --step run                    # runner only → data/raw_responses/
-  python main.py --step parse                  # parser + scorer → data/processed/results.csv
-  python main.py --step analyse                # analysis → results/
+main.py — single entry point for the mental-health-bias-detection pipeline.
+Implements: design.md § main.py CLI, § Batched Runs, § Progress Output.
 """
+
 import argparse
 import sys
+import time
 from pathlib import Path
 
-import pandas as pd
+# ── constants ─────────────────────────────────────────────────────────────────
 
-# Project root is the directory containing this file
-_ROOT = Path(__file__).parent
-sys.path.insert(0, str(_ROOT))
+_ALL_SEVERITIES    = ['mild', 'moderate', 'severe', 'ambiguous']
+_ALL_MODELS        = ['llama3:8b', 'mistral:7b']
+_ALL_PROMPT_TYPES  = ['base', 'mitigation', 'neutral_full', 'neutral_age', 'neutral_gender']
 
-from src.runner   import run as _runner_run
-from src.runner   import ALL_MODELS, ALL_SEVERITIES, ALL_PROMPT_TYPES, ALL_GENDERS, ALL_AGE_GROUPS
-from src.parser   import parse_all
-from src.scorer   import score
-from src.analysis import run as _analysis_run
-
-_RAW_DIR       = _ROOT / "data" / "raw_responses"
-_PROCESSED_DIR = _ROOT / "data" / "processed"
-_RESULTS_DIR   = _ROOT / "results"
-
-# Exact column order from design.md § Output Schema
 _RESULTS_COLUMNS = [
-    "variant_id", "prompt_type", "gender", "age_group", "severity_level",
-    "run_number", "model", "temperature", "timestamp", "raw_response",
-    "diagnosis_label", "diagnosis_yes_no",
-    "severity_score", "impairment_score",
-    "treatment_score", "treatment_type_profile",
-    "minimizing_score",
-    "diagnostic_evidence", "framing_label",
-    "gendered_count", "medicalized_count", "distanced_count", "neutral_count",
+    'variant_id', 'prompt_type', 'gender', 'age_group', 'severity_level',
+    'run_number', 'model', 'temperature', 'timestamp', 'raw_response',
+    'diagnosis_label', 'diagnosis_yes_no',
+    'severity_score', 'impairment_score',
+    'treatment_score', 'treatment_type_profile',
+    'minimizing_score',
+    'diagnostic_evidence', 'framing_label',
+    'gendered_count', 'medicalized_count', 'distanced_count', 'neutral_count',
 ]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _build_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        prog="main.py",
-        description="Gender & Age Bias in LLM-Based Depression Diagnosis — experiment runner.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Examples:\n"
-            "  python main.py --prototype --models llama3:8b   # prototype verification\n"
-            "  python main.py --step parse                      # re-parse existing raw files\n"
-            "  python main.py                                   # full experiment (3120 calls)\n"
-        ),
-    )
-    p.add_argument(
-        "--prototype", action="store_true",
-        help="Prototype scope: one severity level (default mild). "
-             "Use --severity to override the level.",
-    )
-    p.add_argument(
-        "--severity", nargs="+",
-        choices=["mild", "moderate", "severe", "ambiguous"],
-        metavar="LEVEL",
-        help="Severity level(s) to run. Overrides --prototype default.",
-    )
-    p.add_argument(
-        "--models", nargs="+",
-        choices=["llama3:8b", "mistral:7b"],
-        metavar="MODEL",
-        help="Ollama model(s) to use (default: both).",
-    )
-    p.add_argument(
-        "--step", choices=["run", "parse", "analyse"],
-        help=(
-            "Run only one pipeline step:\n"
-            "  run     — call Ollama → data/raw_responses/\n"
-            "  parse   — parse + score raw_responses/ → data/processed/results.csv\n"
-            "  analyse — results.csv → results/\n"
-            "Omit to run all three steps in sequence."
-        ),
-    )
-    p.add_argument(
-        "--runs", type=int, default=10, metavar="N",
-        help="Runs per variant (default: 10).",
-    )
-    return p.parse_args()
+_PROCESSED_DIR = Path('data') / 'processed'
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Completeness check (requirements.md § Acceptance Criteria)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_SCORED_FIELDS = [
-    "diagnosis_yes_no",      # Q1
-    "severity_score",        # Q2
-    "impairment_score",      # Q3
-    "treatment_score",       # Q4a
-    "treatment_type_profile",# Q4b
-    "minimizing_score",      # Q5
-]
+def _model_slug(tag: str) -> str:
+    return tag.split(':')[0]
 
 
-def _check_completeness(df: pd.DataFrame) -> None:
-    """
-    Report 999-rate per scored field (requirements.md § Acceptance Criteria).
-    Threshold: < 5 %. Exceeding it means the prompt or parser needs fixing.
-    """
-    print("\nCompleteness check (requirement: < 5 % 999s per field):")
-    any_fail = False
-    for col in _SCORED_FIELDS:
-        if col not in df.columns:
-            print(f"  SKIP  {col}: column absent")
-            continue
-        rate = (df[col] == 999).mean() * 100
-        status = "FAIL" if rate > 5 else "OK  "
-        print(f"  {status}  {col}: {rate:.1f}% 999s  (n={len(df)})")
-        if rate > 5:
-            any_fail = True
-    if any_fail:
-        print(
-            "\n  WARNING: one or more fields exceed the 5% threshold.\n"
-            "  Fix the prompt format or parser before running the full experiment."
-        )
-    else:
-        print("  All fields within threshold.")
+def _default_judge(models: list[str]) -> str:
+    """Cross-model judge: if one model, use the other; if both, each judges the other (return one for batch)."""
+    other = [m for m in _ALL_MODELS if m not in models]
+    if other:
+        return other[0]
+    # Both models running — caller handles per-model judgement
+    return models[0]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Pipeline steps
-# ─────────────────────────────────────────────────────────────────────────────
+# ── step: run ────────────────────────────────────────────────────────────────
 
-def _step_run(severities: list[str], models: list[str], runs: int) -> None:
-    print(f"\n{'='*60}")
-    print(f"  STEP 1/3 — Runner")
-    print(f"  severities={severities}  models={models}  runs={runs}")
-    print(f"{'='*60}")
-    _runner_run(
-        severities       = severities,
-        prompt_types     = ALL_PROMPT_TYPES,
-        genders          = ALL_GENDERS,
-        age_groups       = ALL_AGE_GROUPS,
-        models           = models,
-        runs_per_variant = runs,
-        output_dir       = _RAW_DIR,
-    )
+def _step_run(severities: list[str], models: list[str],
+              prompt_types: list[str], runs: int) -> None:
+    from src import runner
+    runner.run(severities=severities, models=models,
+               prompt_types=prompt_types, runs_per_variant=runs)
 
 
-def _step_parse(models: list[str]) -> None:
-    """
-    Parse all raw_responses/ on disk and score with LLM-as-judge.
-    Scope flags (severity, models) are intentionally ignored here — the step
-    processes whatever is already on disk (design.md: 'resume from checkpoint').
-    The `models` list is passed to scorer.score() only to determine the
-    cross-model judge mapping.
-    """
-    print(f"\n{'='*60}")
-    print(f"  STEP 2/3 — Parser + Scorer")
-    print(f"{'='*60}")
+# ── step: parse (+score) ─────────────────────────────────────────────────────
+
+def _step_parse(severities: list[str], models: list[str],
+                judge_model: str, raw_dir: Path | None = None) -> None:
+    import pandas as pd
+    from src import parser, scorer
+
+    df = parser.run(raw_dir=raw_dir)
+
+    if df.empty:
+        print("  WARN: parser produced empty DataFrame", file=sys.stderr, flush=True)
+        return
+
+    # Filter to only the requested severities and models if specified
+    if 'severity_level' in df.columns:
+        df = df[df['severity_level'].isin(severities)].copy()
+    if 'model' in df.columns:
+        df = df[df['model'].isin(models)].copy()
+
+    # Initialize treatment columns with correct dtypes per design.md § Column Notes
+    df['treatment_score'] = 999.0
+    df['treatment_type_profile'] = pd.array([999] * len(df), dtype=object)
+
+    df = scorer.run(df, judge_model=judge_model)
+
+    # Drop Q1=999 rows before writing
+    df = df[df['diagnosis_yes_no'] != 999].copy()
+
+    # Write one partition file per severity × model slug
     _PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    for sev in df['severity_level'].unique():
+        for model in df['model'].unique():
+            part = df[(df['severity_level'] == sev) & (df['model'] == model)].copy()
+            if part.empty:
+                continue
+            slug = _model_slug(model)
+            out_path = _PROCESSED_DIR / f"results_{sev}_{slug}.csv"
+            # drop treatment_text before writing (intermediate column)
+            out_cols = [c for c in _RESULTS_COLUMNS if c in part.columns]
+            part = part.reindex(columns=out_cols)
+            part.to_csv(out_path, index=False)
+            print(f"  → wrote {out_path}  ({len(part)} rows)", flush=True)
 
-    print("Parsing raw responses…")
-    df = parse_all(raw_dir=_RAW_DIR)
-    print(f"  Parsed {len(df)} rows from {_RAW_DIR.name}/")
 
-    print("Scoring treatment recommendations (LLM-as-judge)…")
-    # Use unique models found in the data for cross-model judge mapping
-    available = list(df["model"].unique()) if len(df) else models
-    df = score(df, available_models=available)
-
-    # Enforce column order from design.md § Output Schema; drops treatment_text
-    df = df.reindex(columns=[c for c in _RESULTS_COLUMNS if c in df.columns])
-
-    out_path = _PROCESSED_DIR / "results.csv"
-    df.to_csv(out_path, index=False)
-    print(f"  Written {out_path}  ({len(df)} rows × {len(df.columns)} columns)")
-
-    _check_completeness(df)
-
+# ── step: analyse ─────────────────────────────────────────────────────────────
 
 def _step_analyse() -> None:
-    print(f"\n{'='*60}")
-    print(f"  STEP 3/3 — Analysis")
-    print(f"{'='*60}")
-    _analysis_run(
-        results_path = _PROCESSED_DIR / "results.csv",
-        output_dir   = _RESULTS_DIR,
+    from src import analysis
+    analysis.run()
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description='Mental-health bias detection pipeline.',
+        formatter_class=argparse.RawTextHelpFormatter,
     )
+    p.add_argument('--severity', nargs='+', choices=_ALL_SEVERITIES,
+                   default=None,
+                   help='Severity levels to process (default: all four)')
+    p.add_argument('--models', nargs='+', choices=_ALL_MODELS,
+                   default=None,
+                   help='Experiment models (default: both)')
+    p.add_argument('--judge-model', dest='judge_model', default=None,
+                   help='LLM judge for Q4a/Q4b (default: cross-model)')
+    p.add_argument('--step', choices=['run', 'parse', 'analyse'],
+                   default=None,
+                   help='Run only one pipeline step')
+    p.add_argument('--batch', action='store_true',
+                   help='Run + parse for one nightly partition; skip analysis')
+    p.add_argument('--prototype', action='store_true',
+                   help='Single severity (mild unless --severity overrides), full matrix, 1 run')
+    p.add_argument('--runs', type=int, default=10,
+                   help='Runs per variant (default: 10)')
+    return p
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    args = _build_args()
+    _batch_start = time.time()
 
-    # ── Resolve experiment scope ──────────────────────────────────────────────
+    args = _build_parser().parse_args()
+
+    # ── resolve severities ────────────────────────────────────────────────────
     if args.severity:
         severities = args.severity
     elif args.prototype:
-        severities = ["mild"]
+        severities = ['mild']
     else:
-        severities = ALL_SEVERITIES
+        severities = _ALL_SEVERITIES
 
-    models = args.models if args.models else ALL_MODELS
-    step   = args.step
+    # ── resolve models ────────────────────────────────────────────────────────
+    models = args.models if args.models else _ALL_MODELS
 
-    scope_tag = "prototype" if (args.prototype and not args.severity) else "custom"
-    print(
-        f"Mental Health Bias Detection — {scope_tag} scope\n"
-        f"  severities : {severities}\n"
-        f"  models     : {models}\n"
-        f"  step       : {step or 'all (run → parse → analyse)'}\n"
-        f"  runs/variant: {args.runs}"
-    )
+    # ── resolve judge model ───────────────────────────────────────────────────
+    if args.judge_model:
+        judge_model = args.judge_model
+    else:
+        judge_model = _default_judge(models)
 
-    # ── Execute pipeline ──────────────────────────────────────────────────────
-    if step is None or step == "run":
-        _step_run(severities, models, args.runs)
+    # ── resolve prompt_types ──────────────────────────────────────────────────
+    prompt_types = _ALL_PROMPT_TYPES
 
-    if step is None or step == "parse":
-        _step_parse(models)
+    # ── resolve runs per variant ──────────────────────────────────────────────
+    runs = 1 if args.prototype else args.runs
 
-    if step is None or step == "analyse":
+    # ── execute steps ─────────────────────────────────────────────────────────
+    if args.step == 'run':
+        _step_run(severities, models, prompt_types, runs)
+
+    elif args.step == 'parse':
+        _step_parse(severities, models, judge_model)
+
+    elif args.step == 'analyse':
         _step_analyse()
 
-    print("\nDone.")
+    elif args.batch:
+        # run + parse, no analyse
+        _step_run(severities, models, prompt_types, runs)
+        _step_parse(severities, models, judge_model)
+
+    else:
+        # full pipeline
+        _step_run(severities, models, prompt_types, runs)
+        _step_parse(severities, models, judge_model)
+        _step_analyse()
+
+    elapsed = int(time.time() - _batch_start)
+    h, rem  = divmod(elapsed, 3600)
+    m, s    = divmod(rem, 60)
+    print(f"=== BATCH COMPLETE ===  total time: {h}h {m}m {s}s", flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

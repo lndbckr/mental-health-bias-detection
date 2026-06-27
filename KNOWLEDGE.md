@@ -34,6 +34,8 @@ Unlike specialized AI tools used by professionals, general-purpose chatbots (Cha
 - **Diversity Instruction Paradox**: Diversity-aware prompts can produce *higher* bias scores than neutral ones (FAIR-SW-Bench finding). 
 - LLM outputs are **stochastic** – run each variant N ≥ 10 times to capture variance.
 
+### Statistical Approach: Descriptive, Not Inferential
+The N ≥ 10 runs per variant are repeated stochastic generations from a fixed model — they characterise the model's own output distribution, not a random sample drawn from a population. With no population to generalise to, and every condition of interest enumerated exhaustively, inferential tests (p-values, ANOVA, t-tests, chi-square) do not apply. The project reports **descriptive** statistics: means, SDs, ranges, frequencies, proportions, and the observed differences between conditions, with spread shown directly. See requirements.md § Analysis.
 
 ---
 

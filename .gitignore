@@ -17,14 +17,11 @@ ENV/
 data/raw_responses/*.json
 data/processed/*.csv
 
-# IDE
+# IDE / tools
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Results
-results/*.pdf
-results/*.docx
